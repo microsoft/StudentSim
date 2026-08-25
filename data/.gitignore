@@ -1,0 +1,9 @@
+# Raw corpora are never redistributed; they stay local.
+l2/raw/*
+math/raw/*
+!l2/raw/README.md
+!math/raw/README.md
+
+# Chess training and evaluation files are downloaded, not versioned.
+chess/*
+!chess/README.md
