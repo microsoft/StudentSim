@@ -93,9 +93,9 @@ studentsim-eval --domain <domain> --out result.json
   <img src="figures/fig_rl_setup.jpg" width="88%">
 </p>
 
-This final phase trains a tutor policy, not the student simulator, with the frozen simulator serving as the environment. The work consists of three independent preparation steps that feed a single RL run in verl: a starting tutor checkpoint, the positions to practise on together with their reward table, and the reward heads. An episode is an existing student record: a question `Q` and the answer that student got wrong, `A_prev`. The tutor policy writes guidance `G`. A frozen student simulator reads it and emits a revised answer `A_rev`. The reward is how much better the revised answer is, and the policy is updated from that signal.
+This phase trains a tutor policy with the frozen student simulator serving as the environment. The work consists of three independent preparation steps: a starting tutor checkpoint, the positions to practise on together with their reward table, and the reward heads. An episode is an existing student record: a question `Q` and the answer that student got wrong, `A_prev`. The tutor policy writes guidance `G`. A frozen student simulator reads it and emits a revised answer `A_rev`. The reward is how much better the revised answer is, and the policy is updated from that signal.
 
-First, a tutor checkpoint to start from. `studentsim-generate-guidance` writes reference guidance for a set of positions, once in each of four teaching styles. `studentsim-build-corpus` filters that guidance, dropping messages that name an unreachable move, put a piece where there is none, or quote where their information came from. It then balances the styles and splits the data. Then:
+First, a tutor checkpoint to start from. `studentsim-generate-guidance` writes reference guidance for a set of positions, once in each of four teaching styles. `studentsim-build-corpus` filters that guidance, balances the styles and splits the data. Then:
 
 ```bash
 studentsim-train --config configs/training/tutor_sft.yaml
@@ -103,9 +103,9 @@ studentsim-train --config configs/training/tutor_sft.yaml
 
 This trains the tutor by supervised fine-tuning. That checkpoint is also the no-RL comparison.
 
-Second, the positions to practise on. `studentsim-precompute-stockfish` fills the engine-evaluation cache. Then `studentsim-build-playground` writes the RL episodes and the reward table from the same positions. A position is kept only when the cache covers every legal move at it.
+Second, the positions to practise on. `studentsim-precompute-stockfish` fills the engine-evaluation cache. Then `studentsim-build-playground` writes the RL episodes and the reward table from the same positions. 
 
-Third, the reward heads. `studentsim-judge-guidance` asks a model which claims in each message contradict the position. Those labels are merged with rule-derived ones, and `studentsim-train-heads` fits both heads on the frozen simulator.
+Third, the reward heads. `studentsim-judge-guidance` asks a model which claims in each message contradict the position. Those labels are merged with rule-derived ones, and `studentsim-train-heads` learns those signals on the frozen simulator.
 
 After those inputs exist, launch RL with:
 
@@ -115,8 +115,8 @@ studentsim-tutor-rl --config configs/tutor_rl/<name>.yaml
 
 The two shipped RL configs differ only in who plays the student.
 
-- `studentsim_reward.yaml`: the trained student simulator produces the revised move. The reward uses both gates: move quality, scaled by a style gate and a perception gate read off that same simulator's backbone.
-- `prompted_student_reward.yaml`: a closed model prompted to play the student produces the revised move. There are no gates, because the gates read a trained simulator's backbone, and a model reached through an API exposes none.
+- `studentsim_reward.yaml`: the trained student simulator produces the revised move.
+- `prompted_student_reward.yaml`: a closed model prompted to play the student produces the revised move.
 
 Everything else is held fixed between them: the tutor policy, the starting checkpoint, and the training settings.
 

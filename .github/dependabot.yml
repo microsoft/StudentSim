@@ -1,0 +1,19 @@
+version: 2
+
+# Dependabot alerts and security updates are repository settings rather than
+# configuration, and are enabled separately. This file covers version updates,
+# which are what keep a pinned floor from drifting years behind.
+updates:
+  # Declared in pyproject.toml: the two core dependencies and every optional
+  # extra.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The actions used by the CodeQL workflow. Without this they stay at whatever
+  # major tag was written and never pick up a fix.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
