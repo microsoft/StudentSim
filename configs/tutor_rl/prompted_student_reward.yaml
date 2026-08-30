@@ -1,0 +1,54 @@
+# The comparison condition: the same move-quality reward, over the same
+# positions, with the revised move produced by a model prompted to play the
+# student instead of by a trained simulator.
+#
+# No gates. They read a trained simulator's own backbone, and a model reached
+# through an API exposes none, so this is the move-quality term alone. Nothing
+# else about the run changes: same policy, same starting checkpoint, same
+# training settings.
+#
+# The reward needs no GPU and costs one API call per rollout that the answer
+# cache does not already hold.
+
+training:
+  actor_sft_base: chess/sft/tutor/merged
+  output_dir: tutor_rl/run
+  playground_train: tutor_rl/playground_train.parquet
+  playground_val: tutor_rl/playground_val.parquet
+  train_batch_size: 112
+  ppo_mini_batch_size: 112
+  ppo_micro_batch_size_per_gpu: 2
+  advantage_estimator: grpo
+  use_kl_in_reward: false
+  use_kl_loss: true
+  kl_loss_type: low_var_kl
+  kl_loss_coef: 0.01
+  entropy_coeff: 0.0
+  actor_learning_rate: 1.0e-6
+  rollout_engine: vllm
+  rollouts_per_prompt: 4
+  rollout_temperature: 1.0
+  rollout_top_p: 1.0
+  rollout_top_k: -1
+  max_prompt_length: 2048
+  max_response_length: 512
+  total_steps: 20
+  save_freq: 5
+  test_freq: 5
+  eval_checkpoint_step: 20
+  # The policy is the merged tutor SFT checkpoint and RL trains it in
+  # full; rank 0 is verl's way of saying no adapter.
+  actor_lora_rank: 0
+  seed: 42
+  gpu_layout:
+    n_trainer_gpus: 4
+    n_rollout_gpus: 1
+    n_reward_sim_gpus: 0
+    n_style_gate_gpus: 0
+
+reward:
+  reward_table_path: tutor_rl/reward_table.jsonl
+  student_model: gpt-5.4
+  mate_clip_cp: 1500
+  scale_cp: 500
+  illegal_reward: -1.0

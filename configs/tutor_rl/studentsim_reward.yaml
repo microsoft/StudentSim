@@ -1,0 +1,54 @@
+# The tutor RL condition: the reward is a student simulator's move-quality
+# improvement, scaled down by two gates read off the same simulator backbone.
+# The style gate asks whether the guidance is written in the wanted style; the
+# perception gate penalises guidance that misdescribes the board.
+#
+# The policy starts from the merged tutor SFT checkpoint, which is also the
+# no-RL condition. A reward built on a different simulator is the other thing
+# this can be compared against, and it changes nothing here but the reward.
+
+training:
+  actor_sft_base: chess/sft/tutor/merged
+  output_dir: tutor_rl/run
+  playground_train: tutor_rl/playground_train.parquet
+  playground_val: tutor_rl/playground_val.parquet
+  train_batch_size: 112
+  ppo_mini_batch_size: 112
+  ppo_micro_batch_size_per_gpu: 2
+  advantage_estimator: grpo
+  use_kl_in_reward: false
+  use_kl_loss: true
+  kl_loss_type: low_var_kl
+  kl_loss_coef: 0.01
+  entropy_coeff: 0.0
+  actor_learning_rate: 1.0e-6
+  rollout_engine: vllm
+  rollouts_per_prompt: 4
+  rollout_temperature: 1.0
+  rollout_top_p: 1.0
+  rollout_top_k: -1
+  max_prompt_length: 2048
+  max_response_length: 512
+  total_steps: 20
+  save_freq: 5
+  test_freq: 5
+  eval_checkpoint_step: 20
+  # The policy is the merged tutor SFT checkpoint and RL trains it in
+  # full; rank 0 is verl's way of saying no adapter.
+  actor_lora_rank: 0
+  seed: 42
+  gpu_layout:
+    n_trainer_gpus: 4
+    n_rollout_gpus: 1
+    n_reward_sim_gpus: 1
+    n_style_gate_gpus: 1
+
+reward:
+  reward_simulator_path: chess/stage1/adapter
+  reward_table_path: tutor_rl/reward_table.jsonl
+  heads_checkpoint_path: tutor_rl/heads/heads.pt
+  heads_metrics_path: tutor_rl/heads/metrics.json
+  style_gate_preferred: socratic
+  mate_clip_cp: 1500
+  scale_cp: 500
+  illegal_reward: -1.0

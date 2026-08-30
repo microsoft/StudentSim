@@ -1,0 +1,133 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "studentsim"
+version = "0.0.1"
+description = "Per-student AI student simulators for adaptive AI tutoring research (NeurIPS 2026 submission)."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "StudentSim contributors" },
+]
+keywords = ["student-simulation", "ai-tutoring", "lora", "grpo", "behavioral-fidelity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    # Pure-Python core. Heavy ML deps live in optional extras. Everything here
+    # is imported by the package; a dependency nothing imports is a promise
+    # about the environment that nothing checks.
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Per-domain extras. Users of only one domain do not have to pull the heavy deps
+# of the others.
+chess = [
+    "python-chess>=1.999",  # python-chess for FEN/UCI parsing and legality checks
+]
+l2 = [
+    "language-tool-python>=2.7",
+]
+math = [
+    "beautifulsoup4>=4.12",  # problem bodies arrive as HTML with MathML inside
+]
+# Inference backends. The HF backend is required for any local Stage-1 / Stage-2
+# eval. The vLLM backend is required by the tutor RL reward simulator.
+inference = [
+    "torch>=2.1",
+    "transformers>=4.40",
+    "peft>=0.10",
+    "accelerate>=0.30",     # required by device_map="auto"
+    "safetensors>=0.4",     # adapter shards are read directly
+]
+# Tutor RL stack. verl and vLLM are not imported; verl is launched as a
+# subprocess and picks its own rollout backend.
+tutor_rl = [
+    "verl>=0.3",
+    "vllm>=0.5",
+    "cairosvg>=2.7",        # renders the board the tutor and the judge are shown;
+                            # needs libcairo, which pip cannot install for you
+]
+# Closed-source baseline clients.
+baselines = [
+    "openai>=1.30",       # also covers Azure OpenAI
+]
+# Maia2 chess KT baseline. This extra installs what Maia2 runs on, not Maia2
+# itself: the package is not reliably on PyPI, so install it from its own repo.
+maia2 = [
+    "torch>=2.1",
+    "python-chess>=1.999",
+]
+all = [
+    "studentsim[chess,l2,math,inference,tutor_rl,baselines,maia2]",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+studentsim-train = "studentsim.cli.train:main"
+studentsim-eval = "studentsim.cli.eval:main"
+studentsim-tutor-rl = "studentsim.cli.tutor_rl:main"
+studentsim-train-heads = "studentsim.cli.train_heads:main"
+studentsim-baselines = "studentsim.cli.baselines:main"
+studentsim-judge-guidance = "studentsim.cli.judge_guidance:main"
+studentsim-generate-guidance = "studentsim.cli.generate_guidance:main"
+studentsim-build-corpus = "studentsim.cli.build_corpus:main"
+studentsim-build-playground = "studentsim.cli.build_playground:main"
+studentsim-precompute-stockfish = "studentsim.cli.precompute_stockfish:main"
+
+[project.urls]
+Homepage = "https://github.com/microsoft/StudentSim"
+Issues = "https://github.com/microsoft/StudentSim/issues"
+
+[tool.setuptools.packages.find]
+include = ["studentsim*"]
+exclude = ["tests*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "slow: marks tests as slow (run with `pytest -m slow`)",
+    "e2e: marks tests as end-to-end (run manually; not on CI)",
+    "needs_gpu: marks tests that require a CUDA device",
+    "needs_internet: marks tests that need network access (model / data download)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "PL", "RUF"]
+ignore = [
+    "PLR0913",  # too many arguments — common in dataclass __init__ via keyword
+    "PLR2004",  # magic number — readable as inline constants in metric impls
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The judge's two prompts are reproduced verbatim from the run that produced
+# the recorded labels, so their lines cannot be rewrapped.
+"studentsim/tutor_rl/judge.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true

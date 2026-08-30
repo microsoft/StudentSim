@@ -1,0 +1,56 @@
+# Stage 2 (per-student specialization) — chess.
+# Each Stage-2 player trains on 1,000 of their own records
+# for 3 epochs at effective batch 256, total ~12 grad steps.
+# The {student_id} placeholder is substituted by PerStudentDriver.config_builder.
+
+base_model: Qwen/Qwen3-4B-Instruct-2507
+stage: 2
+
+# Per-student paths (PerStudentDriver substitutes {student_id}).
+data_path: chess/stage2/{student_id}.jsonl
+output_dir: chess/stage2/{student_id}
+
+# Loaded by Stage2Trainer via --adapters; same Stage-1 adapter for every student.
+initial_adapter: chess/stage1/adapter
+
+per_device_batch: 4
+gradient_accumulation: 8
+world_size: 8
+effective_batch: 256
+
+max_seq_len: 4096
+precision: bf16
+gradient_checkpointing: true
+
+epochs: 3.0
+multi_turn_ratio: 0.20
+save_freq: 50
+save_total_limit: 3
+
+trainer_seed: 42
+data_sampler_seed: 42
+
+lora:
+  rank: 128
+  alpha: 256
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# Stage 2 halves Stage-1's LR (5e-5 vs 1e-4) and shortens warmup (30 vs 100)
+# because training starts from the Stage-1 adapter, not the base model.
+optimizer:
+  name: adamw_torch_fused
+  learning_rate: 5.0e-5
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  grad_clip: 1.0
+  schedule: cosine
+  warmup_steps: 30

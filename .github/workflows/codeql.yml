@@ -1,0 +1,42 @@
+name: CodeQL
+
+# Static analysis on every change to the default branch, on pull requests
+# targeting it, and once a week so that newly published queries reach code
+# that has not changed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Monday 04:32 UTC. An off-the-hour minute keeps the job out of the
+    # scheduling spike that lands on every :00.
+    - cron: "32 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # Uploading results to the Security tab is what security-events grants.
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          # Python is interpreted, so CodeQL reads the sources directly and
+          # the package's heavy optional extras never have to be installed.
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"

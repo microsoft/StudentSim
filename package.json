@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "workspaces": [
+    "site"
+  ],
+  "scripts": {
+    "site": "npm --workspace site run dev",
+    "site:build": "npm --workspace site run build",
+    "site:preview": "npm --workspace site run preview",
+    "build": "npm run site:build"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  }
+}

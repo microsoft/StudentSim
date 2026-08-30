@@ -1,0 +1,55 @@
+# Supervised finetuning for the chess tutor.
+#
+# The tutor reads a rendered board alongside the text, so this is the one
+# training run in the repository that is multimodal. The vision tower stays
+# frozen: the corpus teaches what to say about a position, not how to see one.
+
+base_model: Qwen/Qwen3-VL-8B-Instruct
+stage: 1
+
+data_path: tutor_rl/sft_corpus.jsonl
+output_dir: tutor_rl/sft
+
+# 1 per device x 32 accumulation x 8 GPUs. Board images make the per-device
+# batch the binding constraint, so the accumulation carries the batch size.
+per_device_batch: 1
+gradient_accumulation: 32
+world_size: 8
+effective_batch: 256
+
+max_seq_len: 2048
+precision: bf16
+gradient_checkpointing: false
+
+freeze_vision_tower: true
+max_pixels: 200704          # 448 x 448
+
+epochs: 1.0
+save_freq: 200
+save_total_limit: 3
+
+trainer_seed: 42
+data_sampler_seed: 42
+
+lora:
+  rank: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+optimizer:
+  name: adamw_torch_fused
+  learning_rate: 1.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  grad_clip: 1.0
+  schedule: cosine
+  warmup_steps: 20

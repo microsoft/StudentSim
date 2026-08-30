@@ -1,0 +1,49 @@
+# Stage 2 (per-student specialization) -- math.
+# 15 students x ~154 instances/student x 3 epochs at effective_batch=256 -> ~3 steps.
+
+base_model: Qwen/Qwen3-4B-Instruct-2507
+stage: 2
+
+data_path: math/stage2/{student_id}.jsonl
+output_dir: math/stage2/{student_id}
+initial_adapter: math/stage1/adapter
+
+per_device_batch: 4
+gradient_accumulation: 8
+world_size: 8
+effective_batch: 256
+
+max_seq_len: 4096
+precision: bf16
+gradient_checkpointing: true
+
+epochs: 3.0
+multi_turn_ratio: 0.20
+save_freq: 1
+save_total_limit: 3
+
+trainer_seed: 42
+data_sampler_seed: 42
+
+lora:
+  rank: 128
+  alpha: 256
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+optimizer:
+  name: adamw_torch_fused
+  learning_rate: 5.0e-5
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  grad_clip: 1.0
+  schedule: cosine
+  warmup_steps: 30
