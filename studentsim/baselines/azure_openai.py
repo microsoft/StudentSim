@@ -9,6 +9,7 @@ here. See :mod:`studentsim.core.paths` for the env-var schema.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     pass
 
 _DEFAULT_API_VERSION = "2024-08-01-preview"
+_COMPLETION_CAP = re.compile(r"(?i)gpt-?5")
+"""Deployment names whose generated-token cap is ``max_completion_tokens``."""
 
 
 class AzureOpenAIClient(LLMClient):
@@ -74,10 +77,13 @@ class AzureOpenAIClient(LLMClient):
         top_p: float = 1.0,
         top_logprobs: int | None = None,
     ) -> LLMResponse:
+        # Deployments on the GPT-5 line take the generated-token cap under a
+        # different name and reject the older one outright.
+        cap = "max_completion_tokens" if _COMPLETION_CAP.search(self._deployment) else "max_tokens"
         kwargs: dict[str, Any] = {
             "model": self._deployment,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
-            "max_tokens": max_tokens,
+            cap: max_tokens,
             "temperature": temperature,
             "top_p": top_p,
         }
