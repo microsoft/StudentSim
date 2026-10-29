@@ -29,7 +29,7 @@ pip install -e '.[chess,inference]'
 
 For the tutor RL phase, include `tutor_rl`. For the closed-model baselines, include `baselines`. The `tutor_rl` extra requires `libcairo` for board rendering.
 
-By default, StudentSim finds its data, checkpoints, run outputs, model cache, and required binaries automatically, but you can point any of these elsewhere with the `STUDENTSIM_*` environment variables if needed. For steps that call a language model, you must set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY`.
+By default, StudentSim finds its data, checkpoints, run outputs, model cache, and required binaries automatically, but you can point any of these elsewhere with the `STUDENTSIM_*` environment variables if needed. For steps that call a language model, you must set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY`. Alternatively, set `OPENAI_API_KEY` to call the OpenAI API directly (plus `OPENAI_BASE_URL` for an OpenAI-compatible endpoint, such as a local server). The provider is chosen by `STUDENTSIM_LLM_PROVIDER` (`azure` or `openai`) when that variable is set; otherwise Azure is used whenever `AZURE_OPENAI_ENDPOINT` is set, and OpenAI otherwise.
 
 ## Student simulator training
 
