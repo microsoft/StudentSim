@@ -38,7 +38,7 @@ chess = [
     "python-chess>=1.999",  # python-chess for FEN/UCI parsing and legality checks
 ]
 l2 = [
-    "language-tool-python>=2.7",
+    "language-tool-python>=2.8",  # first release that takes the LanguageTool version to run
 ]
 math = [
     "beautifulsoup4>=4.12",  # problem bodies arrive as HTML with MathML inside
@@ -51,6 +51,10 @@ inference = [
     "peft>=0.10",
     "accelerate>=0.30",     # required by device_map="auto"
     "safetensors>=0.4",     # adapter shards are read directly
+]
+# Training and decoding run the ms-swift CLI.
+swift = [
+    "ms-swift==3.12.5",
 ]
 # Tutor RL stack. verl and vLLM are not imported; verl is launched as a
 # subprocess and picks its own rollout backend.
@@ -71,7 +75,7 @@ maia2 = [
     "python-chess>=1.999",
 ]
 all = [
-    "studentsim[chess,l2,math,inference,tutor_rl,baselines,maia2]",
+    "studentsim[chess,l2,math,inference,swift,tutor_rl,baselines,maia2]",
 ]
 dev = [
     "pytest>=8.0",

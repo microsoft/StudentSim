@@ -46,11 +46,13 @@ def build_infer_command(
     repetition_penalty: float = 1.0,
     temperature: float = 0.0,
     max_samples: int = 0,
+    model_type: str = "qwen3",
     swift_binary: str | None = None,
 ) -> InferCommand:
     """Construct the ``swift infer`` command for one evaluation pass."""
     argv: list[str] = [swift_binary or swift_bin(), "infer"]
     argv += ["--model", str(base_model)]
+    argv += ["--model_type", model_type]
     argv += ["--ckpt_dir", str(adapter_dir)]
     argv += ["--infer_backend", "pt"]
     argv += ["--max_new_tokens", str(max_new_tokens)]

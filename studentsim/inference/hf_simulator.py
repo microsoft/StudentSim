@@ -1,8 +1,8 @@
 """HuggingFace + PEFT simulator backend.
 
 The :class:`HFSimulator` loads a base model and, optionally, a LoRA adapter,
-and exposes :meth:`generate`, :meth:`generate_batch` and :meth:`logprobs`,
-all honouring the ``enable_thinking=False`` invariant.
+and exposes :meth:`generate`, :meth:`generate_batch`, :meth:`continue_chat`
+and :meth:`logprobs`, all honouring the ``enable_thinking=False`` invariant.
 
 An adapter arrives in more than one shape. A clean PEFT save loads directly; an
 ms-swift or verl checkpoint carries merged-shape tensors under a state_dict
@@ -73,6 +73,9 @@ class HFSimulator:
         self._tokenizer = AutoTokenizer.from_pretrained(spec.base_model, use_fast=True)
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # A decoder-only model continues from the last position of each row,
+        # so a batch is padded on the left.
+        self._tokenizer.padding_side = "left"
 
         base = AutoModelForCausalLM.from_pretrained(
             spec.base_model,
@@ -135,17 +138,43 @@ class HFSimulator:
             generated_ids, skip_special_tokens=True
         )
 
+    def continue_chat(self, messages: Sequence[Mapping], *, max_new_tokens: int) -> str:
+        """Greedily decode the next assistant turn of ``messages``, one record alone.
+
+        The chat is templated as given, with no system turn added, encoded
+        without special tokens, and decoded with ``do_sample=False``.
+        """
+        templated = self._tokenizer.apply_chat_template(
+            [dict(m) for m in messages],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        ids = self._tokenizer.encode(
+            templated, return_tensors="pt", add_special_tokens=False
+        ).to(self._model.device)
+        with self._torch.no_grad():
+            out = self._model.generate(
+                ids,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=self._tokenizer.eos_token_id,
+            )
+        return self._tokenizer.decode(out[0, ids.shape[1] :], skip_special_tokens=True)
+
     def logprobs(
         self,
         prompt: str,
         *,
         candidates: Sequence[str],
     ) -> Mapping[str, float]:
-        """Natural-log probability of each candidate as the next-token continuation.
+        """Natural-log probability of each candidate letter as the next token.
 
-        Used for the math 4-way multiple-choice metric. Each candidate is
-        tokenized; the logprob returned is the sum of per-token log-softmax
-        values for the candidate's tokens, conditioned on the prompt.
+        Used for the math multiple-choice metric. One forward pass over the
+        whole templated prompt gives the next-token distribution. A letter's
+        score is the larger of the log-probabilities of the first token of
+        ``"A"`` and of ``" A"``, so the letter counts however the tokenizer
+        attaches a leading space.
         """
         templated = self._tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
@@ -153,29 +182,27 @@ class HFSimulator:
             add_generation_prompt=True,
             enable_thinking=False,
         )
-        prompt_ids = self._tokenizer(
-            templated, return_tensors="pt", truncation=True, max_length=2048
-        ).input_ids.to(self._model.device)
+        prompt_ids = self._tokenizer.encode(
+            templated, return_tensors="pt", add_special_tokens=False
+        ).to(self._model.device)
+
+        with self._torch.no_grad():
+            logits = self._model(prompt_ids).logits[0, -1, :]
+            log_probs = self._torch.log_softmax(logits, dim=-1)
 
         scores: dict[str, float] = {}
-        with self._torch.no_grad():
-            for cand in candidates:
-                cand_ids = self._tokenizer(
-                    cand, return_tensors="pt", add_special_tokens=False
-                ).input_ids.to(self._model.device)
-                input_ids = self._torch.cat([prompt_ids, cand_ids], dim=1)
-                logits = self._model(input_ids=input_ids).logits
-                # Logits at position t predict token t+1, so the candidate's own
-                # tokens are read from [prompt_len-1 : prompt_len-1+cand_len].
-                start = prompt_ids.shape[1] - 1
-                cand_len = cand_ids.shape[1]
-                relevant = logits[0, start : start + cand_len, :]
-                log_probs = self._torch.log_softmax(relevant.float(), dim=-1)
-                token_scores = log_probs.gather(
-                    -1, cand_ids[0].unsqueeze(-1)
-                ).squeeze(-1)
-                scores[cand] = float(token_scores.sum().item())
+        for cand in candidates:
+            forms = [
+                self._tokenizer.encode(text, add_special_tokens=False)
+                for text in (cand, " " + cand)
+            ]
+            values = [log_probs[ids[0]].item() for ids in forms if ids]
+            scores[cand] = max(values) if values else LETTER_LOGPROB_FLOOR
         return scores
+
+
+LETTER_LOGPROB_FLOOR = -10.0
+"""Score of a candidate the tokenizer encodes to nothing."""
 
 
 def _resolve_dtype(torch_mod, name: str):

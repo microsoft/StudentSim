@@ -43,10 +43,8 @@ lora:
     - down_proj
 
 optimizer:
-  name: adamw_torch_fused
   learning_rate: 5.0e-5
   beta1: 0.9
-  beta2: 0.95
   weight_decay: 0.1
   grad_clip: 1.0
   schedule: cosine

@@ -9,18 +9,19 @@ Three categories of baseline surface here:
    coordinate notation.
 3. **Maia2**: chess-only KT model (no guidance pathway).
 
-The :class:`LLMClientSimulator` wraps any :class:`LLMClient` as a
-:class:`Simulator`, so the same fidelity / guidance runners work for trained
-simulators and closed-source baselines.
+:class:`LLMClientSimulator` and :class:`BaseQwen3` answer role-separated
+chats, which is how ``studentsim-baselines`` queries them; both also satisfy
+the :class:`Simulator` Protocol, where a prompt is one user turn.
 """
 
 from studentsim.baselines.azure_openai import AzureOpenAIClient
-from studentsim.baselines.base_qwen3 import build_base_qwen3_simulator
+from studentsim.baselines.base_qwen3 import BaseQwen3, build_base_qwen3_simulator
 from studentsim.baselines.llm_simulator import LLMClientSimulator
 from studentsim.baselines.maia2 import Maia2Simulator
 
 __all__ = [
     "AzureOpenAIClient",
+    "BaseQwen3",
     "LLMClientSimulator",
     "Maia2Simulator",
     "build_base_qwen3_simulator",

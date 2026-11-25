@@ -6,7 +6,7 @@ stage: 1
 
 # Paths are relative to STUDENTSIM_DATA_DIR / STUDENTSIM_CKPT_DIR.
 # A real run will substitute these via env-var rendering or the CLI.
-data_path: chess/stage1_pooled.jsonl
+data_path: chess/pooled/train.jsonl
 output_dir: chess/stage1
 
 per_device_batch: 4
@@ -40,10 +40,8 @@ lora:
     - down_proj
 
 optimizer:
-  name: adamw_torch_fused
   learning_rate: 1.0e-4
   beta1: 0.9
-  beta2: 0.95
   weight_decay: 0.1
   grad_clip: 1.0
   schedule: cosine

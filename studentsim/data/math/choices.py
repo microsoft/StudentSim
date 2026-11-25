@@ -14,6 +14,7 @@ import html
 import random
 import re
 import sys
+import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -26,6 +27,11 @@ CHOICES = 4
 
 #: Below this many the problem is left out, since a choice of one is no choice.
 MIN_CHOICES = 2
+
+
+def keyed_seed(seed: int, key: str) -> int:
+    """A draw seed for one record: ``seed`` mixed with a checksum of ``key``."""
+    return seed ^ (zlib.crc32(key.encode()) & 0xFFFFFFFF)
 
 
 def clean_candidate(text: str) -> str:
@@ -103,3 +109,43 @@ def append_choices(prompt: str, lettered: dict[str, str]) -> str:
         f"{body}\n\nMultiple-choice options:\n{listed}\n\n"
         f"Pick the letter (A-{last}) you would answer with. Respond with only the letter."
     )
+
+
+def choice_turns(
+    *,
+    student_answer: str,
+    correct_answer: str,
+    problem_id: str,
+    written_by_others: dict[str, Counter],
+    seed_first: int,
+    seed_second: int,
+) -> dict | None:
+    """Options for both answers of a guidance record.
+
+    The first set holds the student's own wrong answer among other students'
+    answers, the second the correct answer among the same. ``None`` when either
+    problem has too few distinct answers, in which case the record stays free
+    text.
+    """
+    first = build_choices(
+        student_answer=student_answer,
+        problem_id=problem_id,
+        written_by_others=written_by_others,
+        seed=seed_first,
+    )
+    if first is None:
+        return None
+    second = build_choices(
+        student_answer=correct_answer,
+        problem_id=problem_id,
+        written_by_others=written_by_others,
+        seed=seed_second,
+    )
+    if second is None:
+        return None
+    return {
+        "first": first[0],
+        "first_letter": first[1],
+        "second": second[0],
+        "second_letter": second[1],
+    }

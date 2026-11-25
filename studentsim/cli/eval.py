@@ -37,7 +37,7 @@ from studentsim.eval import (
     aggregate_responsiveness,
     evaluate_students,
 )
-from studentsim.eval.fidelity import hf_letter_logprobs
+from studentsim.eval.fidelity import hf_chat_decoder, hf_letter_logprobs
 
 SINGLE_TURN_DIR = "test_st"
 MULTI_TURN_DIR = "test_mt"
@@ -96,6 +96,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--raw-dir", type=Path, default=None, help="Keep raw decodes here.")
     parser.add_argument("--out", type=Path, default=None, help="Write results JSON here.")
     parser.add_argument("--swift-binary", default=None)
+    parser.add_argument(
+        "--languagetool-server",
+        default=None,
+        help="URL of a running LanguageTool server for L2 fidelity. Default: start "
+        "LanguageTool locally at the pinned version.",
+    )
     args = parser.parse_args(argv)
 
     _resolve_paths(parser, args)
@@ -106,15 +112,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Fidelity is scored differently per domain: L2 compares error profiles and
     # math ranks the multiple-choice letters, so each needs its own scorer.
+    # Math decodes guidance on the same local backend.
     issue_counter = None
     letter_logprobs_factory = None
+    chat_decoder_factory = None
     if args.single_turn_dir is not None:
         if args.domain == "l2":
             from studentsim.domains.l2.languagetool import LanguageToolCounter
 
-            issue_counter = LanguageToolCounter()
+            issue_counter = LanguageToolCounter(remote_server=args.languagetool_server)
         elif args.domain == "math":
             letter_logprobs_factory = hf_letter_logprobs
+    if args.multi_turn_dir is not None and args.domain == "math":
+        chat_decoder_factory = hf_chat_decoder
 
     results = evaluate_students(
         student_ids=students,
@@ -126,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw_dir=args.raw_dir,
         issue_counter=issue_counter,
         letter_logprobs_factory=letter_logprobs_factory,
+        chat_decoder_factory=chat_decoder_factory,
         swift_binary=args.swift_binary,
     )
 

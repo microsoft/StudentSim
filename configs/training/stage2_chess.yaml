@@ -7,7 +7,7 @@ base_model: Qwen/Qwen3-4B-Instruct-2507
 stage: 2
 
 # Per-student paths (PerStudentDriver substitutes {student_id}).
-data_path: chess/stage2/{student_id}.jsonl
+data_path: chess/players/{student_id}.jsonl
 output_dir: chess/stage2/{student_id}
 
 # Loaded by Stage2Trainer via --adapters; same Stage-1 adapter for every student.
@@ -46,10 +46,8 @@ lora:
 # Stage 2 halves Stage-1's LR (5e-5 vs 1e-4) and shortens warmup (30 vs 100)
 # because training starts from the Stage-1 adapter, not the base model.
 optimizer:
-  name: adamw_torch_fused
   learning_rate: 5.0e-5
   beta1: 0.9
-  beta2: 0.95
   weight_decay: 0.1
   grad_clip: 1.0
   schedule: cosine

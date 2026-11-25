@@ -5,7 +5,12 @@ so two builds of the same extract give identical
 record sets. A learner's identifier seeds their draws and is then replaced by a positional
 name, so nothing in the output identifies anyone.
 
-    python -m studentsim.data.build_l2
+    python -m studentsim.data.l2.build --seed 65
+
+``--seed`` decides which guidance records the pooled and specialization sets
+draw and which held-out guidance records each learner is scored on, so each
+pair in :data:`~studentsim.core.seeds.CROSS_SEED_RUNS` has its own build, given
+its own ``--out``.
 """
 
 from __future__ import annotations
@@ -60,7 +65,6 @@ POOLED_TUTOR_SUFFIX = (
     "Reply with only the corrected text — no explanation, no rewriting the rest."
 )
 
-SEED = DATA_SAMPLER_SEED
 
 
 @dataclass(slots=True)
@@ -205,13 +209,34 @@ def _write(records: list[dict], path: Path) -> None:
     print(f"  {path.name}: {len(records):,}")
 
 
+def _training(records: list[dict]) -> list[dict]:
+    """Training records carry the conversation only."""
+    return [{"messages": record["messages"]} for record in records]
+
+
+def _held_out_guidance(records: list[dict]) -> list[dict]:
+    """Held-out guidance records carry the conversation and the tutor style."""
+    return [
+        {"messages": record["messages"], "instruction_type": record["style"]}
+        for record in records
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m studentsim.data.l2.build")
     parser.add_argument(
         "--raw", type=Path, default=Path("data/l2/raw/ef_POStagged_original_corrected.csv")
     )
     parser.add_argument("--out", type=Path, default=Path("data/l2"))
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DATA_SAMPLER_SEED,
+        help="Data-sampler seed of the run the build is for.",
+    )
     args = parser.parse_args(argv)
+    seed = args.seed
+    out = args.out
 
     print(f"Ranking learners in {args.raw} ...")
     ranked = rank_learners(args.raw)
@@ -268,18 +293,18 @@ def main(argv: list[str] | None = None) -> int:
     for learner in stage1:
         pooled_singles.extend(essays_of(learner, "train", cap_pooled))
         pools[learner] = guidance_of(learner, "train", cap_pooled)
-    pooled_guided = select_balanced(pools, STYLE_WEIGHTS, target_guided, SEED)
+    pooled_guided = select_balanced(pools, STYLE_WEIGHTS, target_guided, seed)
     for record in pooled_guided:
         record["messages"][2]["content"] += "\n\n" + POOLED_TUTOR_SUFFIX
     keep_singles = budget - len(pooled_guided)
     if keep_singles < len(pooled_singles):
-        random.Random(SEED).shuffle(pooled_singles)
+        random.Random(seed).shuffle(pooled_singles)
         pooled_singles = pooled_singles[:keep_singles]
-    _write(pooled_singles + pooled_guided, args.out / "stage1_pooled.jsonl")
+    _write(_training(pooled_singles + pooled_guided), out / "stage1_pooled.jsonl")
 
     # Specialization keeps the learner's own essays and adds guidance on top.
     for learner in stage2:
-        rng = learner_rng(learner, SEED)
+        rng = learner_rng(learner, seed)
         singles = essays_of(learner, "train", cap_specialize)
         pool = guidance_of(learner, "train", cap_specialize)
         n_guided, n_single = guidance_budget(
@@ -287,12 +312,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         guided = select_by_style(pool, STYLE_WEIGHTS, n_guided, rng)
         rng.shuffle(singles)
-        _write(singles[:n_single] + guided, args.out / "stage2" / f"{names[learner]}.jsonl")
+        _write(
+            _training(singles[:n_single] + guided),
+            out / "stage2" / f"{names[learner]}.jsonl",
+        )
 
-        rng = learner_rng(learner, SEED)
+        rng = learner_rng(learner, seed)
         _write(
             essays_of(learner, "test", cap_held_out),
-            args.out / "test_st" / f"{names[learner]}.jsonl",
+            out / "test_st" / f"{names[learner]}.jsonl",
         )
         by_style: dict[str, list[dict]] = defaultdict(list)
         for record in guidance_of(learner, "test", cap_held_out):
@@ -302,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
             candidates = list(by_style[style])
             rng.shuffle(candidates)
             chosen.extend(candidates[:TEST_PER_STYLE])
-        _write(chosen, args.out / "test_mt" / f"{names[learner]}.jsonl")
+        _write(_held_out_guidance(chosen), out / "test_mt" / f"{names[learner]}.jsonl")
 
     return 0
 

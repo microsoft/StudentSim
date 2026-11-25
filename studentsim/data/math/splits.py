@@ -1,9 +1,10 @@
 """Dividing each student's work into what may be trained on and what is held out.
 
 A student's attempts are ordered in time, and the split is chronological, so a
-simulator is always asked to predict later work from earlier work. Every
-student then contributes the same number of records, so that none of them
-dominates a population mean.
+simulator is always asked to predict later work from earlier work. A student's
+first attempts are context for the ones that follow and belong to no split.
+Every student then contributes the same number of records, so that none of
+them dominates a population mean.
 """
 
 from __future__ import annotations
@@ -24,6 +25,9 @@ csv.field_size_limit(sys.maxsize)
 TRAIN_FRACTION = 0.70
 VAL_FRACTION = 0.10
 
+#: Attempts at the start of each student's history that only serve as context.
+CONTEXT_ATTEMPTS = 10
+
 
 @dataclass(slots=True)
 class Attempt:
@@ -38,6 +42,8 @@ class Attempt:
     student asked for a hint, even if the answer they typed was right.
     """
     end_time: str
+    row: int = -1
+    """Position of the attempt in the interactions file."""
 
 
 def normalize_answer(text: str) -> str:
@@ -53,7 +59,7 @@ def read_attempts(
     """Each student's free-text attempts, earliest first."""
     by_student: dict[str, list[Attempt]] = defaultdict(list)
     with open(interactions_csv, encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
+        for position, row in enumerate(csv.DictReader(handle)):
             if row["user_id"] not in students:
                 continue
             problem = str(row.get("problem_id"))
@@ -68,6 +74,7 @@ def read_attempts(
                     answer_text=written,
                     correct=written.lower() == keys.get(problem, "").lower(),
                     end_time=row.get("end_time") or "",
+                    row=position,
                 )
             )
     for attempts in by_student.values():
@@ -98,13 +105,18 @@ def answer_keys(problems_csv: Path, *, repair: bool = False) -> dict[str, str]:
 
 
 def split_chronologically(attempts: list[Attempt]) -> dict[str, list[Attempt]]:
-    """Earliest attempts train, latest are held out."""
-    n_train = int(len(attempts) * TRAIN_FRACTION)
-    n_val = int(len(attempts) * VAL_FRACTION)
+    """Earliest attempts train, latest are held out.
+
+    The first :data:`CONTEXT_ATTEMPTS` are set aside before the fractions are
+    taken, so they fall in no split.
+    """
+    eligible = attempts[CONTEXT_ATTEMPTS:]
+    n_train = int(len(eligible) * TRAIN_FRACTION)
+    n_val = int(len(eligible) * VAL_FRACTION)
     return {
-        "train": attempts[:n_train],
-        "val": attempts[n_train : n_train + n_val],
-        "test": attempts[n_train + n_val :],
+        "train": eligible[:n_train],
+        "val": eligible[n_train : n_train + n_val],
+        "test": eligible[n_train + n_val :],
     }
 
 

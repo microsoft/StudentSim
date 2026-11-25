@@ -28,7 +28,7 @@ python -m studentsim.data.math.build \
 
 The build refuses to run without an audit list rather than quietly treating every key as correct. `--no-audit` builds anyway if that is what you want; the resulting corpus differs from the one the released configs assume.
 
-The second step writes the guidance the tutor gives. By default it generates all guidance styles in one run, writing one file per style under the output directory; `--style` is optional and repeatable if you want only a subset:
+The second step writes the guidance the tutor gives:
 
 ```bash
 python -m studentsim.data.math.generate

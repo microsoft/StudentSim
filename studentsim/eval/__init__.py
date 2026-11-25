@@ -1,8 +1,9 @@
 """Evaluation: decode a trained simulator and score it.
 
-One student is evaluated by decoding their held-out records with
-``swift infer`` against their adapter, then comparing each decode to what the
-student actually did. :func:`evaluate_student` runs both metrics for one
+One student is evaluated by decoding their held-out records against their
+adapter, then comparing each decode to what the student actually did. Chess
+and L2 decode with ``swift infer``; math ranks letters and decodes guidance on
+a locally loaded HuggingFace model. :func:`evaluate_student` runs both metrics for one
 student, :func:`evaluate_students` runs a roster, and the aggregate functions
 reduce a roster to the domain-level numbers.
 """

@@ -55,12 +55,14 @@ class LoRAConfig:
 
 @dataclass(frozen=True, slots=True)
 class OptimizerConfig:
-    """AdamW with a cosine schedule, warmup counted in steps rather than epochs."""
+    """AdamW with a cosine schedule, warmup counted in steps rather than epochs.
 
-    name: str = "adamw_torch_fused"
+    The optimizer implementation and its second-moment decay are left to
+    ms-swift's defaults, so neither is a field here.
+    """
+
     learning_rate: float = 1e-4
     beta1: float = 0.9
-    beta2: float = 0.95
     weight_decay: float = 0.1
     grad_clip: float = 1.0
     schedule: str = "cosine"
@@ -85,6 +87,7 @@ class TrainingConfig:
     output_dir: str
     stage: int                             # 1 or 2
     data_path: str                         # training records for this stage
+    model_type: str = "qwen3"              # ms-swift --model_type
 
     lora: LoRAConfig = field(default_factory=LoRAConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)

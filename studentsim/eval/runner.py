@@ -3,7 +3,10 @@
 Fidelity decodes the student's held-out single-turn records and scores the
 prediction against what the student actually did. Guidance responsiveness
 decodes the multi-turn records, whose tutor turn carries the domain's turn-2
-suffix, and scores the updated answer the same way.
+suffix where it has one, and scores the updated answer the same way. Chess and
+L2 decode through ``swift infer``; math decodes guidance one record at a time
+on the HuggingFace backend and rounds each student's scores as its protocol
+says.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from pathlib import Path
 
 from studentsim.eval.checkpoints import find_last_checkpoint
 from studentsim.eval.fidelity import (
+    ChatDecoderFactory,
     LetterLogprobsFactory,
     score_error_density,
     score_letter_choice,
@@ -38,7 +42,8 @@ def apply_turn2_suffix(source: str | Path, target: str | Path, suffix: str) -> N
     """Copy multi-turn records, appending ``suffix`` to the tutor turn.
 
     A multi-turn record is ``[student turn 1, simulator turn 1, tutor turn]``,
-    so the tutor turn is message index 2.
+    so the tutor turn is message index 2. An empty ``suffix`` copies the
+    records unchanged.
     """
     with open(source, encoding="utf-8") as fin, open(target, "w", encoding="utf-8") as fout:
         for line in fin:
@@ -46,7 +51,11 @@ def apply_turn2_suffix(source: str | Path, target: str | Path, suffix: str) -> N
                 continue
             record = json.loads(line)
             messages = record.get("messages", [])
-            if len(messages) > TURN2_INDEX and messages[TURN2_INDEX].get("role") == "user":
+            if (
+                suffix
+                and len(messages) > TURN2_INDEX
+                and messages[TURN2_INDEX].get("role") == "user"
+            ):
                 turn = dict(messages[TURN2_INDEX])
                 turn["content"] = f"{turn['content']}\n\n{suffix}"
                 messages[TURN2_INDEX] = turn
@@ -102,6 +111,7 @@ def _decode_and_score(
                 strip_think=protocol.strip_think,
                 input_path=dataset if with_modes else None,
                 mode_field=protocol.mode_field,
+                empty_is_miss=protocol.empty_is_miss,
             )
         if raw_dir is not None:
             raw_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +119,61 @@ def _decode_and_score(
                 result_path.read_text(encoding="utf-8"), encoding="utf-8"
             )
     return outcome
+
+
+def _decode_chats_and_score(
+    *,
+    dataset: Path,
+    decode,
+    protocol: EvalProtocol,
+    raw_dir: Path | None,
+    raw_name: str,
+) -> Score:
+    """Decode each record's turn after its tutor turn, one record at a time.
+
+    The decode is scored against the record's last message. The rows written
+    have the shape ``swift infer`` writes, so both are scored the same way.
+    """
+    records = _read_records(dataset)
+    with tempfile.TemporaryDirectory(prefix="studentsim_decode_") as tmp:
+        result_path = Path(tmp) / "result.jsonl"
+        with open(result_path, "w", encoding="utf-8") as handle:
+            for index, record in enumerate(records):
+                messages = record.get("messages", [])
+                if len(messages) != TURN2_INDEX + 2:
+                    raise ValueError(
+                        f"{dataset} record {index} has {len(messages)} messages; "
+                        "a guidance record has four"
+                    )
+                row = {
+                    "response": decode(messages[: TURN2_INDEX + 1]),
+                    "labels": messages[TURN2_INDEX + 1]["content"],
+                }
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        outcome = score_results(
+            result_path,
+            normalize=normalizer_for(protocol.domain),
+            strip_think=protocol.strip_think,
+            input_path=dataset,
+            mode_field=protocol.mode_field,
+            empty_is_miss=protocol.empty_is_miss,
+        )
+        if raw_dir is not None:
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            (raw_dir / raw_name).write_text(
+                result_path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+    return outcome
+
+
+def _rounded(score: Score, decimals: int | None) -> Score:
+    if decimals is None:
+        return score
+    return Score(
+        accuracy=round(score.accuracy, decimals),
+        n_samples=score.n_samples,
+        per_mode=score.per_mode,
+    )
 
 
 def evaluate_student(
@@ -122,10 +187,16 @@ def evaluate_student(
     raw_dir: str | Path | None = None,
     issue_counter: object | None = None,
     letter_logprobs_factory: LetterLogprobsFactory | None = None,
+    chat_decoder_factory: ChatDecoderFactory | None = None,
     runner: RunnerCallable = _default_runner,
     swift_binary: str | None = None,
 ) -> StudentResult:
-    """Evaluate one student's adapter on whichever sets are supplied."""
+    """Evaluate one student's adapter on whichever sets are supplied.
+
+    Math needs ``letter_logprobs_factory`` for fidelity and
+    ``chat_decoder_factory`` for guidance responsiveness, since both run on a
+    locally loaded adapter rather than through ``swift infer``.
+    """
     protocol = protocol_for(domain)
     adapter_dir = find_last_checkpoint(adapter_root)
     if adapter_dir is None:
@@ -148,6 +219,7 @@ def evaluate_student(
             fidelity = score_letter_choice(
                 list(_read_records(single_turn)),
                 letter_logprobs=letter_logprobs_factory(base_model, adapter_dir),
+                decimals=protocol.score_decimals,
             )
         else:
             fidelity = _decode_and_score(
@@ -168,7 +240,23 @@ def evaluate_student(
                 swift_binary=swift_binary,
             )
 
-    if multi_turn is not None:
+    if multi_turn is not None and protocol.guidance_backend == "hf":
+        if chat_decoder_factory is None:
+            raise ValueError(
+                f"{domain} guidance responsiveness decodes on a locally loaded "
+                "adapter, so it needs chat_decoder_factory"
+            )
+        responsiveness = _rounded(
+            _decode_chats_and_score(
+                dataset=Path(multi_turn),
+                decode=chat_decoder_factory(base_model, adapter_dir, protocol.max_new_tokens),
+                protocol=protocol,
+                raw_dir=raw_path,
+                raw_name=f"responsiveness_raw_{student_id}.jsonl",
+            ),
+            protocol.score_decimals,
+        )
+    elif multi_turn is not None:
         with tempfile.TemporaryDirectory(prefix="studentsim_turn2_") as tmp:
             prepared = Path(tmp) / "multi_turn.jsonl"
             apply_turn2_suffix(multi_turn, prepared, protocol.turn2_suffix)
@@ -205,25 +293,34 @@ def evaluate_students(
     raw_dir: str | Path | None = None,
     issue_counter: object | None = None,
     letter_logprobs_factory: LetterLogprobsFactory | None = None,
+    chat_decoder_factory: ChatDecoderFactory | None = None,
     runner: RunnerCallable = _default_runner,
     swift_binary: str | None = None,
 ) -> list[StudentResult]:
-    """Evaluate every student in ``student_ids``, one adapter each."""
+    """Evaluate every student in ``student_ids``, one adapter each.
+
+    Each student must have a record file in every directory supplied; a
+    missing one raises rather than leaving that student out of the mean.
+    """
     results: list[StudentResult] = []
     for student_id in student_ids:
         single = Path(single_turn_dir) / f"{student_id}.jsonl" if single_turn_dir else None
         multi = Path(multi_turn_dir) / f"{student_id}.jsonl" if multi_turn_dir else None
+        for path in (single, multi):
+            if path is not None and not path.is_file():
+                raise FileNotFoundError(f"no evaluation records for {student_id} at {path}")
         results.append(
             evaluate_student(
                 student_id=student_id,
                 domain=domain,
                 base_model=base_model,
                 adapter_root=Path(adapter_root) / student_id,
-                single_turn=single if single and single.is_file() else None,
-                multi_turn=multi if multi and multi.is_file() else None,
+                single_turn=single,
+                multi_turn=multi,
                 raw_dir=raw_dir,
                 issue_counter=issue_counter,
                 letter_logprobs_factory=letter_logprobs_factory,
+                chat_decoder_factory=chat_decoder_factory,
                 runner=runner,
                 swift_binary=swift_binary,
             )

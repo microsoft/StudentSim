@@ -1,50 +1,62 @@
-"""Wrap any :class:`LLMClient` as a :class:`Simulator`.
+"""Wrap a closed-model client as a baseline that answers whole chats.
 
-Allows the closed-source baselines (GPT-4o, GPT-5.4) to be
-scored by the same runners in :mod:`studentsim.eval` as the trained
-simulators.
+A baseline receives the conversation as role-separated turns, so the calls
+here take message lists. Every request goes through the ``chat_completion``
+method of :class:`~studentsim.baselines.azure_openai.AzureOpenAIClient`,
+greedy, and its reply is used as returned, including the error string that
+call gives when the service refuses a request.
 
-Math fidelity needs ``Simulator.logprobs``; the wrapper implements this via the
-LLM client's ``top_logprobs`` parameter on the first generated token.
+Math fidelity needs per-letter log-probabilities; they are read from the
+top alternatives of the first generated token that is itself one of the
+record's letters (see :func:`studentsim.baselines.scoring.closed_letter_logprobs`).
+
+The wrapper also satisfies the :class:`Simulator` Protocol, where a prompt is
+sent as one user turn.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any, Final, TypeVar
 
+from studentsim.baselines.scoring import closed_letter_logprobs
 from studentsim.core.decoding import DecodingConfig
-from studentsim.core.llm import LLMClient, Message
+from studentsim.core.llm import Message
 from studentsim.core.simulator import Simulator, SimulatorSpec
 from studentsim.domains.math.fidelity import LOGPROB_FLOOR
 
 _DEFAULT_TOP_LOGPROBS = 20
+LETTER_MAX_TOKENS: Final = 4
+"""Generated-token cap on the request math fidelity reads letters from."""
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
 
 @dataclass
 class LLMClientSimulator(Simulator):
-    """Adapt a :class:`LLMClient` to the :class:`Simulator` Protocol.
+    """A closed model, called once per chat.
 
     Parameters
     ----------
     client
-        Any :class:`LLMClient` (Azure OpenAI).
+        An :class:`~studentsim.baselines.azure_openai.AzureOpenAIClient`, or
+        anything with the same ``chat_completion`` and ``name``.
     domain
-        Domain name; recorded on :attr:`spec` so downstream code can identify
-        which domain this simulator is configured for.
-    system_prompt
-        Optional system message prepended to every chat. Defaults to ``None``.
+        Domain name; recorded on :attr:`spec`.
     top_logprobs_k
-        How many top logprobs to request from the client when ``logprobs(...)``
-        is called. ``20`` is the OpenAI default cap; GPT-5 family caps at ``5``,
-        so the caller is expected to pass ``5`` for GPT-5.4. Letters not in
-        the returned top-k fall through to ``LOGPROB_FLOOR = -10``.
+        How many alternatives to request per generated token when reading
+        letters. ``20`` is the OpenAI cap; the GPT-5 family caps at ``5``.
+    workers
+        Requests in flight at once. Results keep the input order.
     """
 
-    client: LLMClient
+    client: Any
     domain: str
-    system_prompt: str | None = None
     top_logprobs_k: int = _DEFAULT_TOP_LOGPROBS
+    workers: int = 8
 
     def __post_init__(self) -> None:
         self.spec = SimulatorSpec(
@@ -53,21 +65,87 @@ class LLMClientSimulator(Simulator):
             domain=self.domain,
         )
 
-    def _build_messages(self, prompt: str) -> list[Message]:
-        msgs: list[Message] = []
-        if self.system_prompt:
-            msgs.append(Message(role="system", content=self.system_prompt))
-        msgs.append(Message(role="user", content=prompt))
-        return msgs
+    def _map(self, function: Callable[[_T], _R], items: Sequence[_T]) -> list[_R]:
+        if self.workers <= 1 or len(items) <= 1:
+            return [function(item) for item in items]
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            return list(pool.map(function, items))
+
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        max_new_tokens: int,
+        catch_errors: bool = False,
+    ) -> str:
+        """The model's reply to one chat.
+
+        With ``catch_errors``, an exception the client raises reads as an
+        empty reply; otherwise it propagates.
+        """
+        try:
+            out = self.client.chat_completion(
+                list(messages), max_tokens=max_new_tokens, temperature=0.0
+            )
+        except Exception:
+            if not catch_errors:
+                raise
+            return ""
+        return out if isinstance(out, str) else ""
+
+    def generate_chats(
+        self,
+        chats: Sequence[Sequence[Message]],
+        *,
+        max_new_tokens: int,
+        catch_errors: bool = False,
+    ) -> list[str]:
+        return self._map(
+            lambda chat: self.chat(
+                chat, max_new_tokens=max_new_tokens, catch_errors=catch_errors
+            ),
+            chats,
+        )
+
+    def letter_logprobs(
+        self, messages: Sequence[Message], letters: Sequence[str]
+    ) -> dict[str, float]:
+        """Per-letter log-probabilities, every letter at the floor when the
+        request fails or returns no token log-probabilities."""
+        floor = {letter: LOGPROB_FLOOR for letter in letters}
+        try:
+            out = self.client.chat_completion(
+                list(messages),
+                max_tokens=LETTER_MAX_TOKENS,
+                temperature=0.0,
+                top_logprobs=self.top_logprobs_k,
+                return_raw=True,
+            )
+        except Exception:
+            return floor
+        if isinstance(out, str) or not out or not getattr(out, "choices", None):
+            return floor
+        logprobs = out.choices[0].logprobs
+        if not logprobs or not logprobs.content:
+            return floor
+        return closed_letter_logprobs(logprobs.content, letters)
+
+    def letter_logprobs_batch(
+        self,
+        chats: Sequence[Sequence[Message]],
+        letters: Sequence[Sequence[str]],
+    ) -> list[dict[str, float]]:
+        return self._map(
+            lambda pair: self.letter_logprobs(pair[0], pair[1]),
+            list(zip(chats, letters)),
+        )
+
+    # --- Simulator Protocol surface -----------------------------------------
 
     def generate(self, prompt: str, *, decoding: DecodingConfig) -> str:
-        response = self.client.complete(
-            self._build_messages(prompt),
-            max_tokens=decoding.max_new_tokens,
-            temperature=decoding.temperature,
-            top_p=decoding.top_p,
+        return self.chat(
+            [Message(role="user", content=prompt)], max_new_tokens=decoding.max_new_tokens
         )
-        return response.text
 
     def generate_batch(
         self,
@@ -75,9 +153,10 @@ class LLMClientSimulator(Simulator):
         *,
         decoding: DecodingConfig,
     ) -> list[str]:
-        # No batched chat API; serial calls.
-        # Production users wrap with concurrency at the orchestration layer.
-        return [self.generate(p, decoding=decoding) for p in prompts]
+        return self.generate_chats(
+            [[Message(role="user", content=p)] for p in prompts],
+            max_new_tokens=decoding.max_new_tokens,
+        )
 
     def logprobs(
         self,
@@ -85,11 +164,4 @@ class LLMClientSimulator(Simulator):
         *,
         candidates: Sequence[str],
     ) -> Mapping[str, float]:
-        response = self.client.complete(
-            self._build_messages(prompt),
-            max_tokens=1,
-            temperature=0.0,
-            top_logprobs=self.top_logprobs_k,
-        )
-        top = response.top_logprobs or {}
-        return {c: float(top.get(c, LOGPROB_FLOOR)) for c in candidates}
+        return self.letter_logprobs([Message(role="user", content=prompt)], candidates)

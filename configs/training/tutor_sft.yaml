@@ -5,6 +5,7 @@
 # frozen: the corpus teaches what to say about a position, not how to see one.
 
 base_model: Qwen/Qwen3-VL-8B-Instruct
+model_type: qwen3_vl
 stage: 1
 
 data_path: tutor_rl/sft_corpus.jsonl
@@ -45,10 +46,8 @@ lora:
     - down_proj
 
 optimizer:
-  name: adamw_torch_fused
   learning_rate: 1.0e-4
   beta1: 0.9
-  beta2: 0.95
   weight_decay: 0.1
   grad_clip: 1.0
   schedule: cosine

@@ -38,17 +38,18 @@ RESULT_FIELDS = ("response", "labels")
 
 
 def require_result_fields(rows: list[dict], path: str | Path) -> None:
-    """Fail loudly when a result file lacks the decode or the reference.
+    """Fail loudly when any result row lacks the decode or the reference.
 
-    Both fields defaulting to an empty string would make every record match
+    Both fields defaulting to an empty string would make the row match
     itself, which reads as a perfect score rather than as a broken run.
     """
-    missing = [f for f in RESULT_FIELDS if f not in rows[0]]
-    if missing:
-        raise ValueError(
-            f"{path} has no {' or '.join(missing)} field; scoring it would "
-            f"compare empty strings. Fields present: {sorted(rows[0])}"
-        )
+    for index, row in enumerate(rows):
+        missing = [f for f in RESULT_FIELDS if f not in row]
+        if missing:
+            raise ValueError(
+                f"{path} row {index} has no {' or '.join(missing)} field; scoring it "
+                f"would compare empty strings. Fields present: {sorted(row)}"
+            )
 
 
 def _read_jsonl(path: str | Path) -> Iterator[dict]:
@@ -58,9 +59,21 @@ def _read_jsonl(path: str | Path) -> Iterator[dict]:
                 yield json.loads(line)
 
 
+MODE_FIELDS = ("instruction_type", "style")
+"""Fields a record may carry its guidance mode under, the first one present wins."""
+
+
+def record_mode(row: dict, mode_field: str = "instruction_type") -> str:
+    """The guidance mode of one record, read from ``mode_field`` or ``style``."""
+    for name in (mode_field, *MODE_FIELDS):
+        if row.get(name):
+            return str(row[name])
+    return ""
+
+
 def read_modes(input_path: str | Path, mode_field: str) -> list[str]:
     """Read the per-record guidance mode from an evaluation input file."""
-    return [str(row.get(mode_field, "")) for row in _read_jsonl(input_path)]
+    return [record_mode(row, mode_field) for row in _read_jsonl(input_path)]
 
 
 def score_results(
@@ -70,11 +83,14 @@ def score_results(
     strip_think: bool = False,
     input_path: str | Path | None = None,
     mode_field: str = "instruction_type",
+    empty_is_miss: bool = False,
 ) -> Score:
-    """Score a ``swift infer`` result file.
+    """Score a result file of ``response`` and ``labels`` rows.
 
     Passing ``input_path`` adds the per-mode breakdown, read from
-    ``mode_field``; without it only the overall accuracy is returned.
+    ``mode_field``; without it only the overall accuracy is returned. With
+    ``empty_is_miss`` a row whose normalized decode is empty scores 0 even
+    against an empty reference.
     """
     rows = list(_read_jsonl(result_path))
     if not rows:
@@ -87,9 +103,10 @@ def score_results(
     mode_hits: dict[str, int] = {}
     mode_total: dict[str, int] = {}
     for index, row in enumerate(rows):
+        predicted = normalize(str(row["response"]), strip_think)
         hit = int(
-            normalize(str(row.get("response", "")), strip_think)
-            == normalize(str(row.get("labels", "")), strip_think)
+            predicted == normalize(str(row["labels"]), strip_think)
+            and not (empty_is_miss and predicted == "")
         )
         hits += hit
         if index < len(modes) and modes[index]:

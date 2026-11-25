@@ -20,6 +20,10 @@ from studentsim.domains.l2.fidelity import LT_BUCKETS, IssueCounts
 # category density nor the total.
 _WORD_RE: Final = re.compile(r"\b\w+\b")
 
+#: The LanguageTool release that counts issues. Rule sets change between
+#: releases, so a different one gives different counts on the same essay.
+LANGUAGETOOL_VERSION: Final = "6.6"
+
 # language-tool-python renamed this attribute between releases. Reading the
 # wrong name would silently score every text as error-free.
 _ISSUE_TYPE_ATTRS: Final = ("rule_issue_type", "ruleIssueType")
@@ -45,13 +49,22 @@ class LanguageToolCounter:
     locale
         LanguageTool locale, default ``"en-US"``. The L2 corpus is in
         English; other locales are accepted but untested here.
+    remote_server
+        URL of a running LanguageTool server to query. When omitted, the
+        package downloads and starts LanguageTool :data:`LANGUAGETOOL_VERSION`.
+        A remote server is used as is, so it should run that version too.
     """
 
-    def __init__(self, *, locale: str = "en-US") -> None:
+    def __init__(self, *, locale: str = "en-US", remote_server: str | None = None) -> None:
         # Lazy import so users who never run L2 evaluation don't need a JVM.
         import language_tool_python
 
-        self._lt = language_tool_python.LanguageTool(locale)
+        if remote_server is not None:
+            self._lt = language_tool_python.LanguageTool(locale, remote_server=remote_server)
+        else:
+            self._lt = language_tool_python.LanguageTool(
+                locale, language_tool_download_version=LANGUAGETOOL_VERSION
+            )
 
     def count(self, text: str) -> IssueCounts:
         word_count = len(_WORD_RE.findall(text or ""))

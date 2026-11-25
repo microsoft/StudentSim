@@ -1,18 +1,30 @@
 """Generating the multi-turn math records.
 
 Each record starts from an attempt the student got wrong. The student's
-reasoning, the tutor's response, and the student's second attempt are written
-by a language model; the problem, the wrong answer, and the correct answer come
-from the data.
+reasoning and the tutor's response are written by a language model; the
+problem, the wrong answer, and the correct answer come from the data.
 
-Every style is written in one run by default. Records go to one file per
-student, under ``test_mt`` for the held-out attempts and ``stage2_mt`` for the
-rest, which is the shape evaluation and Stage-2 training read.
+The build step lists every record to write in ``wrong_attempts.jsonl``, each in
+one tutor style and with its options already drawn. A record with options is
+multiple choice in both turns: the student's first answer is the letter of their
+own wrong answer, the tutor turn ends with options built around the correct
+answer, and the second answer is the letter of the correct one. A record whose
+problem has too few distinct answers stays free text.
 
-The first turn is the student reasoning towards their own wrong answer, which
-does not depend on how a tutor later responds, so it is written once and reused
-by the styles that follow, and cached on disk so a rerun does not pay for it
-again.
+This step writes three things into ``--out``:
+
+``test_mt/<student>.jsonl``
+    The guidance responsiveness set, with the tutor style under
+    ``instruction_type``. Its free-text records keep the student's reasoning
+    in both answers.
+``stage1_pooled.jsonl`` and ``stage2/<student>.jsonl``
+    The training stages: the single-turn records the build wrote, followed by
+    the guidance records. Training answers carry no reasoning.
+
+The student's reasoning towards their wrong answer does not depend on how a
+tutor later responds, so it is written once per attempt, reused by every style,
+and cached on disk so a rerun does not pay for it again. The reasoning behind
+the second answer is written only where a record keeps it.
 
     python -m studentsim.data.math.generate
 """
@@ -24,6 +36,7 @@ import json
 from pathlib import Path
 
 from studentsim.core.llm import Message, open_client
+from studentsim.data.math.choices import append_choices
 from studentsim.data.math.guidance import (
     STYLES,
     TURN1_THINKING_SYS,
@@ -34,9 +47,9 @@ from studentsim.data.math.guidance import (
 #: Room for a tutor turn or a student's reasoning.
 MAX_TOKENS = 600
 
-#: Where each split's records go. ``test_mt`` is where evaluation reads the
-#: multi-turn held-out set from, matching the L2 build.
-SPLIT_DIRS = {"stage2": "stage2_mt", "heldout": "test_mt"}
+#: Where the build step writes the single-turn part of each training stage.
+STAGE1_SINGLE = "stage1_st.jsonl"
+STAGE2_SINGLE = "stage2_st"
 
 
 def _ask(client, system: str, user: str) -> str:
@@ -59,118 +72,131 @@ def write_turn1(client, *, problem: str, skill: str, student_answer: str) -> str
     )
 
 
-def build_record(
-    client,
-    *,
-    style: str,
-    student: str,
-    prompt: str,
-    problem: str,
-    skill: str,
-    student_answer: str,
-    correct_answer: str,
-    turn1: str,
-    past_errors: list,
-) -> dict:
-    """One four-message record in the given tutor style."""
-    tutor_system, tutor_user, reply_system, reply_user = STYLES[style]
+def _answer(reasoning: str, answer: str) -> str:
+    return f"<think>\n{reasoning}\n</think>\n\n{answer}"
+
+
+def assemble(row: dict, *, turn1: str, tutor: str, reply: str | None) -> list[dict]:
+    """The four messages of one record.
+
+    A training record drops the reasoning from both answers. A record with
+    options turns both answers into letters and lists the options after the
+    prompt and after the tutor turn.
+    """
+    training = row["target"] != "test_mt"
+    choices = row["choices"]
+    first = row["student_answer"] if training else _answer(turn1, row["student_answer"])
+    second = row["correct_answer"]
+    if not training and choices is None:
+        second = _answer(reply or "", row["correct_answer"])
+    messages = [
+        {"role": "user", "content": row["prompt"]},
+        {"role": "assistant", "content": first},
+        {"role": "user", "content": tutor},
+        {"role": "assistant", "content": second},
+    ]
+    if choices is None:
+        return messages
+    return [
+        {"role": "user", "content": append_choices(row["prompt"], choices["first"])},
+        {"role": "assistant", "content": choices["first_letter"]},
+        {"role": "user", "content": append_choices(tutor, choices["second"])},
+        {"role": "assistant", "content": choices["second_letter"]},
+    ]
+
+
+def write_record(client, row: dict, turn1: str) -> list[dict]:
+    """Write the tutor turn for one row, and the second reasoning where it is kept."""
+    tutor_system, tutor_user, reply_system, reply_user = STYLES[row["style"]]
     fields = {
-        "problem_body": problem,
-        "skill": skill,
-        "student_answer": student_answer,
-        "correct_answer": correct_answer,
+        "problem_body": row["problem"],
+        "skill": row["skill"],
+        "student_answer": row["student_answer"],
+        "correct_answer": row["correct_answer"],
         "turn1_thinking": turn1,
-        "past_errors_block": format_past_errors(past_errors),
+        "past_errors_block": format_past_errors(row.get("past_errors", [])),
     }
     tutor = _ask(client, tutor_system, tutor_user.format(**fields))
-    reply = _ask(client, reply_system, reply_user.format(**fields, tutor_instruction=tutor))
-    return {
-        "messages": [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": f"<think>{turn1}</think>{student_answer}"},
-            {"role": "user", "content": tutor},
-            {"role": "assistant", "content": f"<think>{reply}</think>{correct_answer}"},
-        ],
-        "style": style,
-        "student": student,
-    }
+    reply = None
+    if row["target"] == "test_mt" and row["choices"] is None:
+        reply = _ask(client, reply_system, reply_user.format(**fields, tutor_instruction=tutor))
+    return assemble(row, turn1=turn1, tutor=tutor, reply=reply)
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _write_jsonl(records: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m studentsim.data.math.generate")
-    parser.add_argument("--style", choices=sorted(STYLES), action="append",
-                        help="Repeatable; every style is written when this is not given.")
     parser.add_argument("--wrong-attempts", type=Path,
                         default=Path("data/math/wrong_attempts.jsonl"),
-                        help="JSONL of wrong attempts, as the build step writes it.")
+                        help="JSONL of guidance records to write, as the build step writes it.")
     parser.add_argument("--out", type=Path, default=Path("data/math"),
-                        help="Directory to write one multiturn_<style>.jsonl into.")
+                        help="The build step's output directory, which this step completes.")
     parser.add_argument("--turn1-cache", type=Path, default=Path("data/math/turn1_cache.jsonl"))
     parser.add_argument("--model", default="gpt-5.4", help="the model that writes the turns")
     args = parser.parse_args(argv)
 
-    styles = args.style or sorted(STYLES)
     client = open_client(args.model)
     cache: dict[str, str] = {}
     if args.turn1_cache.is_file():
-        for line in args.turn1_cache.read_text().splitlines():
-            entry = json.loads(line)
+        for entry in _read_jsonl(args.turn1_cache):
             cache[entry["interaction_id"]] = entry["turn1_thinking"]
     print(f"Reusing {len(cache):,} first-turn traces", flush=True)
 
-    attempts = [json.loads(line) for line in args.wrong_attempts.read_text().splitlines()]
-    args.out.mkdir(parents=True, exist_ok=True)
-    print(f"{len(attempts):,} attempts x {len(styles)} styles", flush=True)
+    rows = _read_jsonl(args.wrong_attempts)
+    print(f"{len(rows):,} guidance records to write", flush=True)
 
-    # Records go to one file per student, in the directory their split is read
-    # from: held-out records are what guidance responsiveness is scored on, and
-    # the rest are Stage-2 training records. The styles share the first turn,
-    # which is the student reasoning towards their own wrong answer and is
-    # settled before any tutor speaks, so writing it per style would pay for
-    # the same trace once per style.
-    written: dict[tuple[str, str], list[dict]] = {}
+    stage1: list[dict] = []
+    stage2: dict[str, list[dict]] = {}
+    held_out: dict[str, list[dict]] = {}
     with open(args.turn1_cache, "a", encoding="utf-8") as cache_file:
-        for index, attempt in enumerate(attempts, 1):
-            key = attempt["interaction_id"]
+        for index, row in enumerate(rows, 1):
+            key = row["interaction_id"]
             if key not in cache:
                 cache[key] = write_turn1(
                     client,
-                    problem=attempt["problem"],
-                    skill=attempt["skill"],
-                    student_answer=attempt["student_answer"],
+                    problem=row["problem"],
+                    skill=row["skill"],
+                    student_answer=row["student_answer"],
                 )
                 cache_file.write(
                     json.dumps({"interaction_id": key, "turn1_thinking": cache[key]}) + "\n"
                 )
                 cache_file.flush()
-            for style in styles:
-                record = build_record(
-                    client,
-                    style=style,
-                    student=attempt["student"],
-                    prompt=attempt["prompt"],
-                    problem=attempt["problem"],
-                    skill=attempt["skill"],
-                    student_answer=attempt["student_answer"],
-                    correct_answer=attempt["correct_answer"],
-                    turn1=cache[key],
-                    past_errors=attempt.get("past_errors", []),
+            messages = write_record(client, row, cache[key])
+            if row["target"] == "stage1":
+                stage1.append({"messages": messages})
+            elif row["target"] == "stage2":
+                stage2.setdefault(row["student"], []).append({"messages": messages})
+            else:
+                held_out.setdefault(row["student"], []).append(
+                    {"messages": messages, "instruction_type": row["style"]}
                 )
-                where = SPLIT_DIRS[attempt.get("split", "heldout")]
-                written.setdefault((where, attempt["student"]), []).append(record)
             if index % 25 == 0:
-                print(f"  {index:,}/{len(attempts):,}", flush=True)
+                print(f"  {index:,}/{len(rows):,}", flush=True)
 
-    for (where, student), records in sorted(written.items()):
-        target = args.out / where / f"{student}.jsonl"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    for where in sorted({w for w, _ in written}):
-        n = sum(len(v) for (w, _), v in written.items() if w == where)
-        students = len({s for w, s in written if w == where})
-        print(f"wrote {n:,} records for {students} students under {args.out / where}", flush=True)
+    _write_jsonl(_read_jsonl(args.out / STAGE1_SINGLE) + stage1, args.out / "stage1_pooled.jsonl")
+    for single in sorted((args.out / STAGE2_SINGLE).glob("*.jsonl")):
+        student = single.stem
+        _write_jsonl(
+            _read_jsonl(single) + stage2.get(student, []), args.out / "stage2" / single.name
+        )
+    for student, records in sorted(held_out.items()):
+        _write_jsonl(records, args.out / "test_mt" / f"{student}.jsonl")
+    print(
+        f"wrote {len(stage1):,} pooled, {sum(map(len, stage2.values())):,} specialization and "
+        f"{sum(map(len, held_out.values())):,} held-out guidance records under {args.out}",
+        flush=True,
+    )
     return 0
 
 

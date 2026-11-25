@@ -45,6 +45,7 @@ def build_ms_swift_command(
     """
     argv: list[str] = [swift_binary, "sft"]
 
+    argv += ["--model_type", config.model_type]
     argv += ["--model", config.base_model]
     argv += ["--dataset", config.data_path]
     argv += ["--output_dir", config.output_dir]
@@ -56,11 +57,10 @@ def build_ms_swift_command(
     argv += ["--lora_dropout", str(config.lora.dropout)]
     argv += ["--target_modules", *config.lora.target_modules]
 
-    # Optimizer + schedule.
-    argv += ["--optim", config.optimizer.name]
+    # Optimizer + schedule. The optimizer and its second-moment decay are
+    # ms-swift's own defaults.
     argv += ["--learning_rate", str(config.optimizer.learning_rate)]
     argv += ["--adam_beta1", str(config.optimizer.beta1)]
-    argv += ["--adam_beta2", str(config.optimizer.beta2)]
     argv += ["--weight_decay", str(config.optimizer.weight_decay)]
     argv += ["--max_grad_norm", str(config.optimizer.grad_clip)]
     argv += ["--lr_scheduler_type", config.optimizer.schedule]
