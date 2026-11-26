@@ -54,7 +54,7 @@ inference = [
 ]
 # Training and decoding run the ms-swift CLI.
 swift = [
-    "ms-swift==3.12.5",
+    "ms-swift==4.6.1",
 ]
 # Tutor RL stack. verl and vLLM are not imported; verl is launched as a
 # subprocess and picks its own rollout backend.
