@@ -15,8 +15,11 @@ STUDENTSIM_MODEL_CACHE         HuggingFace / ModelScope model cache             
 STUDENTSIM_RUN_DIR             Per-run output (logs, predictions, metrics)            ``./runs``
 STUDENTSIM_MS_SWIFT_BIN        ms-swift ``swift`` binary path                         ``shutil.which("swift")``
 STUDENTSIM_STOCKFISH_BIN       Stockfish binary path                                  ``shutil.which("stockfish")``
+STUDENTSIM_LLM_PROVIDER        LLM provider: ``azure`` or ``openai``                  unset (Azure if endpoint set, else OpenAI)
 AZURE_OPENAI_ENDPOINT          Azure OpenAI endpoint (e.g., for GPT-5.4 baseline)     ``None`` (required when calling Azure backends)
 AZURE_OPENAI_API_KEY           Azure OpenAI API key                                   ``None`` (required when calling Azure backends)
+OPENAI_API_KEY                 OpenAI API key                                         ``None`` (required when calling OpenAI backends)
+OPENAI_BASE_URL                OpenAI-compatible endpoint base URL                    ``None`` (the OpenAI API)
 ============================  =====================================================  ==================================================
 
 Absolute paths must not appear in any code file. If you catch one, replace it

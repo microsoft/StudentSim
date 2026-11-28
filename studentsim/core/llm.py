@@ -11,6 +11,7 @@ dropped in without touching the steps that use it.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Mapping, Protocol, runtime_checkable
@@ -91,7 +92,24 @@ def open_client(model: str) -> LLMClient:
     The steps that call a model ask for one through here, so swapping in
     another provider is a matter of returning a different implementation of
     :class:`LLMClient` rather than editing those steps.
-    """
-    from studentsim.baselines import AzureOpenAIClient
 
-    return AzureOpenAIClient(deployment=model)
+    Which provider serves the model is decided by the
+    ``STUDENTSIM_LLM_PROVIDER`` environment variable when it is set
+    (``"azure"`` or ``"openai"``). When it is not set, Azure OpenAI is used
+    if ``AZURE_OPENAI_ENDPOINT`` is set, and the OpenAI API otherwise, so
+    configurations that worked before the OpenAI client existed keep
+    working unchanged. See :mod:`studentsim.core.paths` for the env-var
+    schema.
+    """
+    provider = os.environ.get("STUDENTSIM_LLM_PROVIDER", "").strip().lower()
+    if not provider:
+        provider = "azure" if os.environ.get("AZURE_OPENAI_ENDPOINT") else "openai"
+    if provider == "azure":
+        from studentsim.baselines import AzureOpenAIClient
+
+        return AzureOpenAIClient(deployment=model)
+    if provider == "openai":
+        from studentsim.baselines import OpenAIClient
+
+        return OpenAIClient(model=model)
+    raise ValueError(f"Unknown STUDENTSIM_LLM_PROVIDER {provider!r}; expected 'azure' or 'openai'.")
